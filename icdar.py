@@ -37,7 +37,7 @@ def get_images():
     files = []
     for ext in ['jpg', 'png', 'jpeg', 'JPG']:
         files.extend(glob.glob(
-            os.path.join(FLAGS.training_data_path, '*.{}'.format(ext))))
+            os.path.join(FLAGS.training_data_path, 'img/*.{}'.format(ext))))
     return files
 
 
@@ -601,7 +601,8 @@ def generator(input_size=512, batch_size=32,
                 im = cv2.imread(im_fn)
                 # print im_fn
                 h, w, _ = im.shape
-                txt_fn = im_fn.replace(os.path.basename(im_fn).split('.')[1], 'txt')
+                name_only = os.path.splitext(os.path.basename(im_fn))[0]
+                txt_fn = os.path.join(FLAGS.training_data_path, 'gt/{}.txt'.format(name_only))
                 if not os.path.exists(txt_fn):
                     print('text file {} does not exists'.format(txt_fn))
                     continue
