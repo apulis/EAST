@@ -186,4 +186,8 @@ def main(argv=None):
                 summary_writer.add_summary(summary_str, global_step=step)
 
 if __name__ == '__main__':
+    obs_path = 'obs://qi20200503test/icdar15'
+    local_data_path = '/home/ma-user/work/icdar15'
+
+    # download_ds.download_dataset(obs_path, local_data_path)
     tf.app.run()
