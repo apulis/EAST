@@ -1,7 +1,13 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = 3 # level 取"1":显示所有信息，"2":只显示 warning 和 Error, "3":只显示 Error
+
 import time
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
+
+import horovod.tensorflow as hvd
+from tensorflow import keras
 
 tf.app.flags.DEFINE_integer('input_size', 512, '')
 tf.app.flags.DEFINE_integer('batch_size_per_gpu', 14, '')
@@ -67,6 +73,9 @@ def average_gradients(tower_grads):
 
 
 def main(argv=None):
+    # Horovod: initialize Horovod.
+    hvd.init()
+
     import os
     os.environ['CUDA_VISIBLE_DEVICES'] = FLAGS.gpu_list
     if not tf.gfile.Exists(FLAGS.checkpoint_path):
@@ -84,13 +93,13 @@ def main(argv=None):
         input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 8], name='input_geo_maps')
     input_training_masks = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_training_masks')
 
+    lr_scaler = hvd.size()
     global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
-    learning_rate = tf.train.exponential_decay(FLAGS.learning_rate, global_step, decay_steps=10000, decay_rate=0.94, staircase=True)
+    learning_rate = tf.train.exponential_decay(FLAGS.learning_rate * lr_scaler, global_step, decay_steps=10000, decay_rate=0.94, staircase=True)
     # add summary
     tf.summary.scalar('learning_rate', learning_rate)
     opt = tf.train.AdamOptimizer(learning_rate)
-    # opt = tf.train.MomentumOptimizer(learning_rate, 0.9)
-
+    opt = hvd.DistributedOptimizer(opt, op=hvd.Average)
 
     # split
     input_images_split = tf.split(input_images, len(gpus))
@@ -117,7 +126,7 @@ def main(argv=None):
     grads = average_gradients(tower_grads)
     apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
 
-    summary_op = tf.summary.merge_all()
+    #summary_op = tf.summary.merge_all()
     # save moving average
     variable_averages = tf.train.ExponentialMovingAverage(
         FLAGS.moving_average_decay, global_step)
@@ -126,55 +135,57 @@ def main(argv=None):
     with tf.control_dependencies([variables_averages_op, apply_gradient_op, batch_norm_updates_op]):
         train_op = tf.no_op(name='train_op')
 
-    saver = tf.train.Saver(tf.global_variables())
-    summary_writer = tf.summary.FileWriter(FLAGS.checkpoint_path, tf.get_default_graph())
+    #saver = tf.train.Saver(tf.global_variables())
+    #summary_writer = tf.summary.FileWriter(FLAGS.checkpoint_path, tf.get_default_graph())
 
     init = tf.global_variables_initializer()
 
     if FLAGS.pretrained_model_path is not None:
         variable_restore_op = slim.assign_from_checkpoint_fn(FLAGS.pretrained_model_path, slim.get_trainable_variables(),
                                                              ignore_missing_vars=True)
-    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-        if FLAGS.restore:
-            print('continue training from previous checkpoint')
-            ckpt = tf.train.latest_checkpoint(FLAGS.checkpoint_path)
-            saver.restore(sess, ckpt)
-        else:
-            sess.run(init)
-            if FLAGS.pretrained_model_path is not None:
-                variable_restore_op(sess)
 
-        data_generator = icdar.get_batch(num_workers=FLAGS.num_readers,
-                                         input_size=FLAGS.input_size,
-                                         batch_size=FLAGS.batch_size_per_gpu * len(gpus))
+    hooks = [
+        # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states
+        # from rank 0 to all other processes. This is necessary to ensure consistent
+        # initialization of all workers when training is started with random weights
+        # or restored from a checkpoint.
+        hvd.BroadcastGlobalVariablesHook(0),
 
-        start = time.time()
-        for step in range(FLAGS.max_steps):
+        # Horovod: adjust number of steps based on number of GPUs.
+        tf.train.StopAtStepHook(last_step=FLAGS.max_steps // hvd.size()),
+
+        tf.train.LoggingTensorHook(tensors={'step': global_step, 'model_loss': model_loss, 'total_loss': total_loss, },
+                                   every_n_iter=10),
+    ]
+
+    # Horovod: pin GPU to be used to process local rank (one GPU per process)
+    config = tf.ConfigProto(allow_soft_placement=True)
+    config.gpu_options.allow_growth = True
+    config.gpu_options.visible_device_list = str(hvd.local_rank())
+
+    # Horovod: save checkpoints only on worker 0 to prevent other workers from
+    # corrupting them.
+    checkpoint_dir = FLAGS.checkpoint_path if hvd.rank() == 0 else None
+    data_generator = icdar.get_batch(num_workers=FLAGS.num_readers,
+                                    input_size=FLAGS.input_size,
+                                    batch_size=FLAGS.batch_size_per_gpu * hvd.size())
+    # The MonitoredTrainingSession takes care of session initialization,
+    # restoring from a checkpoint, saving to a checkpoint, and closing when done
+    # or an error occurs.
+    with tf.train.MonitoredTrainingSession(checkpoint_dir=checkpoint_dir,
+                                           hooks=hooks,
+                                           config=config) as mon_sess:
+        mon_sess.run(init)
+        if FLAGS.pretrained_model_path is not None:
+            variable_restore_op(mon_sess)
+
+        while not mon_sess.should_stop():
+            # Run a training step synchronously.
             data = next(data_generator)
-            ml, tl, _ = sess.run([model_loss, total_loss, train_op], feed_dict={input_images: data[0],
-                                                                                input_score_maps: data[2],
-                                                                                input_geo_maps: data[3],
-                                                                                input_training_masks: data[4]})
-            if np.isnan(tl):
-                print('Loss diverged, stop training')
-                break
-
-            if step % 10 == 0:
-                avg_time_per_step = (time.time() - start)/10
-                avg_examples_per_second = (10 * FLAGS.batch_size_per_gpu * len(gpus))/(time.time() - start)
-                start = time.time()
-                print('Step {:06d}, model loss {:.4f}, total loss {:.4f}, {:.2f} seconds/step, {:.2f} examples/second'.format(
-                    step, ml, tl, avg_time_per_step, avg_examples_per_second))
-
-            if step % FLAGS.save_checkpoint_steps == 0:
-                saver.save(sess, FLAGS.checkpoint_path + 'model.ckpt', global_step=global_step)
-
-            if step % FLAGS.save_summary_steps == 0:
-                _, tl, summary_str = sess.run([train_op, total_loss, summary_op], feed_dict={input_images: data[0],
-                                                                                             input_score_maps: data[2],
-                                                                                             input_geo_maps: data[3],
-                                                                                             input_training_masks: data[4]})
-                summary_writer.add_summary(summary_str, global_step=step)
+            mon_sess.run([model_loss, total_loss, train_op], feed_dict={input_images: data[0],
+                                                                        input_score_maps: data[2],
+                                                                        input_geo_maps: data[3],
+                                                                        input_training_masks: data[4]})
 
 if __name__ == '__main__':
     tf.app.run()
