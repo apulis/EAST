@@ -1,0 +1,33 @@
+# Commands
+
+```shell
+cd EAST/
+
+sudo apt-get install libgeos-dev
+pip install -r requirements.txt
+pip install -U numpy
+
+pip install opencv-python
+sudo apt update && sudo apt install -y libsm6 libxext6
+sudo apt-get install -y libxrender-dev
+sudo apt-get install libxrender1
+
+sudo apt-get install wget
+wget http://download.tensorflow.org/models/resnet_v1_50_2016_08_28.tar.gz
+tar -zxf resnet_v1_50_2016_08_28.tar.gz -C ./
+```
+
+## GPU
+```shell
+# multi-gpu
+python multigpu_train.py --gpu_list=0 --input_size=512 --batch_size_per_gpu=4 --checkpoint_path=/tmp/east_icdar2015_resnet_v1_50_rbox/ --text_scale=512 --training_data_path=/data/OCR/icdar2015/train/ --geometry=RBOX --learning_rate=0.0001 --num_readers=24 --pretrained_model_path=./resnet_v1_50.ckpt
+
+# single-gpu
+python singlegpu_train.py --gpu_list=0 --input_size=512 --batch_size_per_gpu=4 --checkpoint_path=/tmp/east_icdar2015_resnet_v1_50_rbox/ --text_scale=512 --training_data_path=/data/OCR/icdar2015/train/ --geometry=RBOX --learning_rate=0.0001 --num_readers=24 --pretrained_model_path=./resnet_v1_50.ckpt
+```
+
+## NPU
+```shell
+# single-npu
+python singlegpu_train.py --gpu_list=0 --input_size=512 --batch_size_per_gpu=4 --checkpoint_path=/tmp/east_icdar2015_resnet_v1_50_rbox/ --text_scale=512 --training_data_path=/home/ma-user/work/icdar15/train/ --geometry=RBOX --learning_rate=0.0001 --num_readers=24 --pretrained_model_path=./resnet_v1_50.ckpt
+```
