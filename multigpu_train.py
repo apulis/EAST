@@ -1,5 +1,5 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = 3 # level 取"1":显示所有信息，"2":只显示 warning 和 Error, "3":只显示 Error
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3" # level 取"1":显示所有信息，"2":只显示 warning 和 Error, "3":只显示 Error
 
 import time
 import numpy as np
@@ -95,7 +95,7 @@ def main(argv=None):
     # add summary
     tf.summary.scalar('learning_rate', learning_rate)
     opt = tf.train.AdamOptimizer(learning_rate)
-    opt = hvd.DistributedOptimizer(opt, op=hvd.Average)
+    opt = hvd.DistributedOptimizer(opt)
 
     # split
     input_images_split = tf.split(input_images, hvd.size())
