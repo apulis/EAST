@@ -15,7 +15,6 @@ tf.app.flags.DEFINE_integer('num_readers', 16, '')
 tf.app.flags.DEFINE_float('learning_rate', 0.0001, '')
 tf.app.flags.DEFINE_integer('max_steps', 100000, '')
 tf.app.flags.DEFINE_float('moving_average_decay', 0.997, '')
-tf.app.flags.DEFINE_string('gpu_list', '1', '')
 tf.app.flags.DEFINE_string('checkpoint_path', '/tmp/east_resnet_v1_50_rbox/', '')
 tf.app.flags.DEFINE_boolean('restore', False, 'whether to resotre from checkpoint')
 tf.app.flags.DEFINE_integer('save_checkpoint_steps', 1000, '')
@@ -26,8 +25,6 @@ import model
 import icdar
 
 FLAGS = tf.app.flags.FLAGS
-
-gpus = list(range(len(FLAGS.gpu_list.split(','))))
 
 
 def tower_loss(images, score_maps, geo_maps, training_masks, reuse_variables=None):
@@ -77,7 +74,6 @@ def main(argv=None):
     hvd.init()
 
     import os
-    os.environ['CUDA_VISIBLE_DEVICES'] = FLAGS.gpu_list
     if not tf.gfile.Exists(FLAGS.checkpoint_path):
         tf.gfile.MkDir(FLAGS.checkpoint_path)
     else:
@@ -102,16 +98,16 @@ def main(argv=None):
     opt = hvd.DistributedOptimizer(opt, op=hvd.Average)
 
     # split
-    input_images_split = tf.split(input_images, len(gpus))
-    input_score_maps_split = tf.split(input_score_maps, len(gpus))
-    input_geo_maps_split = tf.split(input_geo_maps, len(gpus))
-    input_training_masks_split = tf.split(input_training_masks, len(gpus))
+    input_images_split = tf.split(input_images, hvd.size())
+    input_score_maps_split = tf.split(input_score_maps, hvd.size())
+    input_geo_maps_split = tf.split(input_geo_maps, hvd.size())
+    input_training_masks_split = tf.split(input_training_masks, hvd.size())
 
     tower_grads = []
     reuse_variables = None
-    for i, gpu_id in enumerate(gpus):
-        with tf.device('/gpu:%d' % gpu_id):
-            with tf.name_scope('model_%d' % gpu_id) as scope:
+    for i in range(hvd.size()):
+        with tf.device('/gpu:%d' % i):
+            with tf.name_scope('model_%d' % i) as scope:
                 iis = input_images_split[i]
                 isms = input_score_maps_split[i]
                 igms = input_geo_maps_split[i]
