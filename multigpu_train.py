@@ -77,7 +77,7 @@ def main(argv=None):
     if not tf.gfile.Exists(FLAGS.checkpoint_path):
         tf.gfile.MkDir(FLAGS.checkpoint_path)
     else:
-        if not FLAGS.restore:
+        if not FLAGS.restore and hvd.rank() == 0:
             tf.gfile.DeleteRecursively(FLAGS.checkpoint_path)
             tf.gfile.MkDir(FLAGS.checkpoint_path)
 
@@ -90,7 +90,7 @@ def main(argv=None):
     input_training_masks = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_training_masks')
 
     lr_scaler = hvd.size()
-    global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
+    global_step = tf.get_variable('global_step', [], dtype=tf.int32, initializer=tf.constant_initializer(0), trainable=False)
     learning_rate = tf.train.exponential_decay(FLAGS.learning_rate * lr_scaler, global_step, decay_steps=10000, decay_rate=0.94, staircase=True)
     # add summary
     tf.summary.scalar('learning_rate', learning_rate)
@@ -178,6 +178,7 @@ def main(argv=None):
         while not mon_sess.should_stop():
             # Run a training step synchronously.
             data = next(data_generator)
+            print('sess.run, rank: {}'.format(hvd.rank()))
             mon_sess.run([model_loss, total_loss, train_op], feed_dict={input_images: data[0],
                                                                         input_score_maps: data[2],
                                                                         input_geo_maps: data[3],
