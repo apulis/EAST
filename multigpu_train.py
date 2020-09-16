@@ -5,9 +5,11 @@ import time
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
-
-import horovod.tensorflow as hvd
-from tensorflow import keras
+from hccl.manage.api import get_local_rank_id
+from hccl.manage.api import get_rank_size
+from hccl.manage.api import get_rank_id
+from npu_bridge.estimator import npu_ops
+from npu_bridge.estimator.npu.npu_optimizer import NPUDistributedOptimizer
 
 tf.app.flags.DEFINE_integer('input_size', 512, '')
 tf.app.flags.DEFINE_integer('batch_size_per_gpu', 14, '')
@@ -70,14 +72,22 @@ def average_gradients(tower_grads):
 
 
 def main(argv=None):
-    # Horovod: initialize Horovod.
-    hvd.init()
+    npu_int = npu_ops.initialize_system()
+    npu_shutdown = npu_ops.shutdown_system()
+
+    config = tf.ConfigProto()
+    custom_op =  config.graph_options.rewrite_options.custom_optimizers.add()
+    custom_op.name =  "NpuOptimizer"
+    custom_op.parameter_map["use_off_line"].b = True
+    config.graph_options.rewrite_options.remapping = RewriterConfig.OFF  #关闭remap开关
+    init_sess = tf.Session(config=config)
+    init_sess.run(npu_int)
 
     import os
     if not tf.gfile.Exists(FLAGS.checkpoint_path):
         tf.gfile.MkDir(FLAGS.checkpoint_path)
     else:
-        if not FLAGS.restore and hvd.rank() == 0:
+        if not FLAGS.restore and get_rank_id() == 0:
             tf.gfile.DeleteRecursively(FLAGS.checkpoint_path)
             tf.gfile.MkDir(FLAGS.checkpoint_path)
 
@@ -89,35 +99,35 @@ def main(argv=None):
         input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 8], name='input_geo_maps')
     input_training_masks = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_training_masks')
 
-    lr_scaler = hvd.size()
+    lr_scaler = get_rank_size()
     global_step = tf.get_variable('global_step', [], dtype=tf.int32, initializer=tf.constant_initializer(0), trainable=False)
     learning_rate = tf.train.exponential_decay(FLAGS.learning_rate * lr_scaler, global_step, decay_steps=10000, decay_rate=0.94, staircase=True)
     # add summary
     tf.summary.scalar('learning_rate', learning_rate)
     opt = tf.train.AdamOptimizer(learning_rate)
-    opt = hvd.DistributedOptimizer(opt)
+    opt = NPUDistributedOptimizer(opt)
 
     # split
-    input_images_split = tf.split(input_images, hvd.size())
-    input_score_maps_split = tf.split(input_score_maps, hvd.size())
-    input_geo_maps_split = tf.split(input_geo_maps, hvd.size())
-    input_training_masks_split = tf.split(input_training_masks, hvd.size())
+    input_images_split = tf.split(input_images, get_rank_size())
+    input_score_maps_split = tf.split(input_score_maps, get_rank_size())
+    input_geo_maps_split = tf.split(input_geo_maps, get_rank_size())
+    input_training_masks_split = tf.split(input_training_masks, get_rank_size())
 
     tower_grads = []
     reuse_variables = None
-    for i in range(hvd.size()):
-        with tf.device('/gpu:%d' % i):
-            with tf.name_scope('model_%d' % i) as scope:
-                iis = input_images_split[i]
-                isms = input_score_maps_split[i]
-                igms = input_geo_maps_split[i]
-                itms = input_training_masks_split[i]
-                total_loss, model_loss = tower_loss(iis, isms, igms, itms, reuse_variables)
-                batch_norm_updates_op = tf.group(*tf.get_collection(tf.GraphKeys.UPDATE_OPS, scope))
-                reuse_variables = True
+    for i in range(get_rank_size()):
+        #with tf.device('/gpu:%d' % i):
+        with tf.name_scope('model_%d' % i) as scope:
+            iis = input_images_split[i]
+            isms = input_score_maps_split[i]
+            igms = input_geo_maps_split[i]
+            itms = input_training_masks_split[i]
+            total_loss, model_loss = tower_loss(iis, isms, igms, itms, reuse_variables)
+            batch_norm_updates_op = tf.group(*tf.get_collection(tf.GraphKeys.UPDATE_OPS, scope))
+            reuse_variables = True
 
-                grads = opt.compute_gradients(total_loss)
-                tower_grads.append(grads)
+            grads = opt.compute_gradients(total_loss)
+            tower_grads.append(grads)
 
     grads = average_gradients(tower_grads)
     apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
@@ -145,10 +155,10 @@ def main(argv=None):
         # from rank 0 to all other processes. This is necessary to ensure consistent
         # initialization of all workers when training is started with random weights
         # or restored from a checkpoint.
-        hvd.BroadcastGlobalVariablesHook(0),
+        #hvd.BroadcastGlobalVariablesHook(0),
 
         # Horovod: adjust number of steps based on number of GPUs.
-        tf.train.StopAtStepHook(last_step=FLAGS.max_steps // hvd.size()),
+        tf.train.StopAtStepHook(last_step=FLAGS.max_steps // get_rank_size()),
 
         tf.train.LoggingTensorHook(tensors={'step': global_step, 'model_loss': model_loss, 'total_loss': total_loss, },
                                    every_n_iter=10),
@@ -157,14 +167,14 @@ def main(argv=None):
     # Horovod: pin GPU to be used to process local rank (one GPU per process)
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
-    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    config.gpu_options.visible_device_list = str(get_local_rank_id())
 
     # Horovod: save checkpoints only on worker 0 to prevent other workers from
     # corrupting them.
-    checkpoint_dir = FLAGS.checkpoint_path if hvd.rank() == 0 else None
+    checkpoint_dir = FLAGS.checkpoint_path if get_rank_id() == 0 else None
     data_generator = icdar.get_batch(num_workers=FLAGS.num_readers,
                                     input_size=FLAGS.input_size,
-                                    batch_size=FLAGS.batch_size_per_gpu * hvd.size())
+                                    batch_size=FLAGS.batch_size_per_gpu * get_rank_size())
     # The MonitoredTrainingSession takes care of session initialization,
     # restoring from a checkpoint, saving to a checkpoint, and closing when done
     # or an error occurs.
@@ -178,11 +188,13 @@ def main(argv=None):
         while not mon_sess.should_stop():
             # Run a training step synchronously.
             data = next(data_generator)
-            print('sess.run, rank: {}'.format(hvd.rank()))
+            print('sess.run, rank: {}'.format(get_rank_id()))
             mon_sess.run([model_loss, total_loss, train_op], feed_dict={input_images: data[0],
                                                                         input_score_maps: data[2],
                                                                         input_geo_maps: data[3],
                                                                         input_training_masks: data[4]})
+    init_sess.run(npu_shutdown)
+    init_sess.close()
 
 if __name__ == '__main__':
     tf.app.run()
