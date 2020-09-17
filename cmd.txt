@@ -21,4 +21,20 @@ python singlegpu_train.py --gpu_list=0 --input_size=512 --batch_size_per_gpu=4 -
 python singlegpu_train.py --gpu_list=0 --input_size=512 --batch_size_per_gpu=4 --checkpoint_path=/tmp/east_icdar2015_resnet_v1_50_rbox/ --text_scale=512 --training_data_path=/data/OCR/icdar2015/train/ --geometry=RBOX --learning_rate=0.0001 --num_readers=24 --pretrained_model_path=./resnet_v1_50.ckpt
 
 
-horovodrun -np 2 -H localhost:2 python singlegpu_train.py --gpu_list=0 --input_size=512 --batch_size_per_gpu=4 --checkpoint_path=/tmp/east_icdar2015_resnet_v1_50_rbox/ --text_scale=512 --training_data_path=/data/OCR/icdar2015/train/ --geometry=RBOX --learning_rate=0.0001 --num_readers=24 --pretrained_model_path=/home/Wen.Qi/code/EAST/resnet_v1_50.ckpt
+horovodrun -np 2 -H localhost:2 python multigpu_train.py --input_size=512 --batch_size_per_gpu=4 --checkpoint_path=/tmp/east_icdar2015_resnet_v1_50_rbox/ --text_scale=512 --training_data_path=/data/OCR/icdar2015/train/ --geometry=RBOX --learning_rate=0.0001 --num_readers=24 --pretrained_model_path=/home/Wen.Qi/code/EAST/resnet_v1_50.ckpt
+
+mpirun -np 4 \
+    -bind-to none -map-by slot \
+    -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
+    -mca pml ob1 -mca btl ^openib \
+	python /examples/tensorflow_mnist.py
+	
+export SOC_VERSION=Ascend910
+export HCCL_CONNECT_TIMEOUT=200
+export RANK_TABLE_FILE=/data/dataset/storage/EAST/conf/hccl.json
+export RANK_INDEX=0
+export RANK_ID=jupyter--44-45-2df5072444-2df635-2d11ea-2d85e7-2d0255ac100032
+export RANK_SIZE=1
+export DEVICE_ID=0
+export DEVICE_INDEX=0
+export PYTHONHTTPSVERIFY = 0
