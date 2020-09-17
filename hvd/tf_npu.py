@@ -23,13 +23,18 @@ from npu_bridge.estimator import npu_ops
 from npu_bridge.estimator.npu.npu_optimizer import NPUDistributedOptimizer
 from tensorflow.core.protobuf.rewriter_config_pb2 import RewriterConfig
 import numpy as np
+import moxing as mox
 
 from tensorflow import keras
+
+from dataset import create_dataset, device_id, device_num
 
 layers = tf.layers
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
+tf.app.flags.DEFINE_string('data_url', '', '')
+tf.app.flags.DEFINE_string('train_url', '', '')
 
 def conv_model(feature, target, mode):
     """2-layer convolution model."""
@@ -82,6 +87,15 @@ def train_input_generator(x_train, y_train, batch_size=64):
 
 
 def main(_):
+    local_data_path = '/cache/data'
+
+    if device_num > 1:
+        local_data_path = os.path.join(local_data_path, str(device_id))
+
+    # data download
+    print('Download data.')
+    mox.file.copy_parallel(src_url=FLAGS.data_url, dst_url=local_data_path)
+
     npu_int = npu_ops.initialize_system()
     npu_shutdown = npu_ops.shutdown_system()
 
@@ -149,7 +163,7 @@ def main(_):
 
     # Horovod: save checkpoints only on worker 0 to prevent other workers from
     # corrupting them.
-    checkpoint_dir = './checkpoints' if get_rank_id() == 0 else None
+    checkpoint_dir = FLAGS.train_url+'/checkpoints' if get_rank_id() == 0 else None
     training_batch_generator = train_input_generator(x_train,
                                                      y_train, batch_size=100)
     # The MonitoredTrainingSession takes care of session initialization,
