@@ -165,7 +165,7 @@ def main(_):
 
     # Horovod: save checkpoints only on worker 0 to prevent other workers from
     # corrupting them.
-    checkpoint_dir = FLAGS.train_url+'/checkpoints' if get_rank_id() == 0 else None
+    checkpoint_dir = './checkpoints' if get_rank_id() == 0 else None
     training_batch_generator = train_input_generator(x_train,
                                                      y_train, batch_size=100)
     # The MonitoredTrainingSession takes care of session initialization,
