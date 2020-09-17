@@ -1,0 +1,23 @@
+{
+"status": "completed",
+"group_count": "1",
+"group_list": [
+  {
+    "group_name": "worker",
+    "device_count": "1",
+    "instance_count": "1",
+    "instance_list": [
+      {
+        "pod_name": "jupyter--44-45-2df5072444-2df635-2d11ea-2d85e7-2d0255ac100032",
+        "server_id": "192.168.40.1",
+        "devices": [
+          {
+            "device_id": "0",
+            "device_ip": "192.168.40.1"
+          }
+        ]
+      }
+    ]
+  }
+]
+}
