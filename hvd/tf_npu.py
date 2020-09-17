@@ -27,14 +27,13 @@ import moxing as mox
 
 from tensorflow import keras
 
-from dataset import create_dataset, device_id, device_num
-
 layers = tf.layers
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
 tf.app.flags.DEFINE_string('data_url', '', '')
 tf.app.flags.DEFINE_string('train_url', '', '')
+FLAGS = tf.app.flags.FLAGS
 
 def conv_model(feature, target, mode):
     """2-layer convolution model."""
@@ -87,15 +86,6 @@ def train_input_generator(x_train, y_train, batch_size=64):
 
 
 def main(_):
-    local_data_path = '/cache/data'
-
-    if device_num > 1:
-        local_data_path = os.path.join(local_data_path, str(device_id))
-
-    # data download
-    print('Download data.')
-    mox.file.copy_parallel(src_url=FLAGS.data_url, dst_url=local_data_path)
-
     npu_int = npu_ops.initialize_system()
     npu_shutdown = npu_ops.shutdown_system()
 
@@ -122,9 +112,17 @@ def main(_):
             else:
                 raise
 
+    if get_rank_size() > 1:
+        local_data_path = os.path.join(cache_dir, 'MNIST-data-%d.npz' % get_rank_id())
+
+    # data download
+    print('Download data.')
+    mox.file.copy_parallel(src_url=os.path.join(FLAGS.data_url, 'mnist.npz'),
+                           dst_url=local_data_path)
+
     # Download and load MNIST dataset.
     (x_train, y_train), (x_test, y_test) = \
-        keras.datasets.mnist.load_data('MNIST-data-%d' % get_rank_id())
+        keras.datasets.mnist.load_data(local_data_path)
 
     # The shape of downloaded data is (-1, 28, 28), hence we need to reshape it
     # into (-1, 784) to feed into our network. Also, need to normalize the
@@ -158,7 +156,12 @@ def main(_):
 
     # Horovod: pin GPU to be used to process local rank (one GPU per process)
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
+    custom_op = config.graph_options.rewrite_options.custom_optimizers.add()
+    custom_op.name =  "NpuOptimizer"
+    custom_op.parameter_map["use_off_line"].b = True
+    config.graph_options.rewrite_options.remapping = RewriterConfig.OFF  #关闭remap开关
+
+    # config.gpu_options.allow_growth = True
     config.gpu_options.visible_device_list = str(get_local_rank_id())
 
     # Horovod: save checkpoints only on worker 0 to prevent other workers from
