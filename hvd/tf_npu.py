@@ -155,12 +155,8 @@ def main(_):
 
     # Horovod: pin GPU to be used to process local rank (one GPU per process)
     config = tf.ConfigProto()
-    custom_op = config.graph_options.rewrite_options.custom_optimizers.add()
-    custom_op.name =  "NpuOptimizer"
-    custom_op.parameter_map["use_off_line"].b = True
-    config.graph_options.rewrite_options.remapping = RewriterConfig.OFF  #关闭remap开关
 
-    # config.gpu_options.allow_growth = True
+    config.gpu_options.allow_growth = True
     config.gpu_options.visible_device_list = str(get_local_rank_id())
 
     # Horovod: save checkpoints only on worker 0 to prevent other workers from
