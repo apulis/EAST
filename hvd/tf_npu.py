@@ -112,8 +112,7 @@ def main(_):
             else:
                 raise
 
-    if get_rank_size() > 1:
-        local_data_path = os.path.join(cache_dir, 'MNIST-data-%d.npz' % get_rank_id())
+    local_data_path = os.path.join(cache_dir, 'MNIST-data-%d.npz' % get_rank_id())
 
     # data download
     print('Download data.')
