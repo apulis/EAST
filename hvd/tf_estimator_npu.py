@@ -184,6 +184,9 @@ def main(unused_argv):
     train_data = np.reshape(train_data, (-1, 784)) / 255.0
     eval_data = np.reshape(eval_data, (-1, 784)) / 255.0
 
+    train_data=np.float32(train_data)
+    eval_data=np.float32(eval_data)
+
     # Horovod: pin GPU to be used to process local rank (one GPU per process)
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
